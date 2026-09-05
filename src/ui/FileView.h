@@ -148,6 +148,7 @@ private:
     Settings::ViewMode m_mode = Settings::ViewMode::Details;
     bool m_checkBoxes = false;
     bool m_singleClick = false;
+    bool m_renaming = false;
     QUrl m_destination;
 
     // So switching a column on later does not reset every other width

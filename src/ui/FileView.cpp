@@ -539,8 +539,10 @@ void FileView::buildDetailsView()
     auto *delegate = new ItemDelegate(m_model, this);
     delegate->onRename = [this](const QModelIndex &index, const QString &name) {
         const KFileItem item = itemAtViewIndex(index);
-        if (!item.isNull() && !name.isEmpty() && name != item.name())
+        if (!item.isNull() && !name.isEmpty() && name != item.name()) {
             Q_EMIT renameRequested(item.url(), name);
+            m_renaming = false;
+        }
     };
     m_details->setItemDelegate(delegate);
 
@@ -609,8 +611,10 @@ void FileView::buildIconView()
     auto *delegate = new ItemDelegate(m_model, this);
     delegate->onRename = [this](const QModelIndex &index, const QString &name) {
         const KFileItem item = itemAtViewIndex(index);
-        if (!item.isNull() && !name.isEmpty() && name != item.name())
+        if (!item.isNull() && !name.isEmpty() && name != item.name()) {
             Q_EMIT renameRequested(item.url(), name);
+            m_renaming = false;
+        }
     };
     m_icons->setItemDelegate(delegate);
 
@@ -900,10 +904,14 @@ void FileView::bindActivation(QAbstractItemView *view)
         auto *action = new QAction(view);
         action->setShortcut(key);
         action->setShortcutContext(Qt::WidgetWithChildrenShortcut);
-        connect(action, &QAction::triggered, this, [view, activate] {
+        connect(action, &QAction::triggered, this, [this, view, activate] {
             const QModelIndex current = view->currentIndex();
-            if (current.isValid())
-                activate(current);
+            if (current.isValid()) {
+                if (m_renaming)
+                    view->indexWidget(current)->clearFocus();
+                else
+                    activate(current);
+            }
         });
         view->addAction(action);
     }
@@ -1015,6 +1023,7 @@ void FileView::renameItem(const QUrl &url)
     if (!index.isValid())
         return;
 
+    m_renaming = true;
     QAbstractItemView *view = currentView();
     // Editing is off by default, so a stray double click cannot start a rename
     view->setEditTriggers(QAbstractItemView::AllEditTriggers);
