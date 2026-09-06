@@ -2829,11 +2829,12 @@ void MainWindow::applyRename(const QUrl &url, const QString &newName)
         return item.url() == url;
     });
     if (batch.size() > 1 && sameBatch) {
-        FileOps::renameBatch(batch, newName, this);
-        return;
+        QUrl newUrl = FileOps::renameBatch(batch, newName, this);
+        m_fileView->selectUrl(newUrl);
+    } else {
+        QUrl newUrl = FileOps::rename(url, newName, this);
+        m_fileView->selectUrl(newUrl);
     }
-
-    FileOps::rename(url, newName, this);
 }
 
 void MainWindow::createNewFolder()

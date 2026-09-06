@@ -465,6 +465,23 @@ using IconList = DropTarget<QListView>;
 
 } // namespace
 
+void FileView::onRenameDelegate(const QModelIndex &index, const QString &name)
+{
+    const KFileItem item = itemAtViewIndex(index);
+    if (!item.isNull() && !name.isEmpty() && name != item.name()) {
+        if (m_renameState == FileView::RenameState::LOCKED) {
+            m_renameState = FileView::RenameState::RENAMING;
+            Q_EMIT renameRequested(item.url(), name);
+        }
+        // FIXME: A workaround for closing the rename prompt without crashing.
+    } else if (m_renameState != FileView::RenameState::NORMAL) {
+        m_renameState = FileView::RenameState::NORMAL;
+        auto view = currentView();
+        Q_EMIT view->itemDelegate()->closeEditor(view->indexWidget(index));
+    } else
+        selectUrl(item.url());
+}
+
 FileView::FileView(DirectoryModel *model, QWidget *parent)
     : QWidget(parent)
     , m_model(model)
@@ -538,11 +555,7 @@ void FileView::buildDetailsView()
 
     auto *delegate = new ItemDelegate(m_model, this);
     delegate->onRename = [this](const QModelIndex &index, const QString &name) {
-        const KFileItem item = itemAtViewIndex(index);
-        if (!item.isNull() && !name.isEmpty() && name != item.name()) {
-            Q_EMIT renameRequested(item.url(), name);
-            m_renaming = false;
-        }
+        onRenameDelegate(index, name);
     };
     m_details->setItemDelegate(delegate);
 
@@ -610,11 +623,7 @@ void FileView::buildIconView()
 
     auto *delegate = new ItemDelegate(m_model, this);
     delegate->onRename = [this](const QModelIndex &index, const QString &name) {
-        const KFileItem item = itemAtViewIndex(index);
-        if (!item.isNull() && !name.isEmpty() && name != item.name()) {
-            Q_EMIT renameRequested(item.url(), name);
-            m_renaming = false;
-        }
+        onRenameDelegate(index, name);
     };
     m_icons->setItemDelegate(delegate);
 
@@ -907,10 +916,18 @@ void FileView::bindActivation(QAbstractItemView *view)
         connect(action, &QAction::triggered, this, [this, view, activate] {
             const QModelIndex current = view->currentIndex();
             if (current.isValid()) {
-                if (m_renaming)
-                    view->indexWidget(current)->clearFocus();
-                else
-                    activate(current);
+                switch (m_renameState) {
+                    case FileView::RenameState::RENAMING:
+                        break;
+                    case FileView::RenameState::LOCKED: {
+                        QWidget* editor = view->indexWidget(current);
+                        Q_EMIT view->itemDelegate()->commitData(editor);
+                        break;
+                    }
+                    default:
+                        activate(current);
+                        break;
+                }
             }
         });
         view->addAction(action);
@@ -1023,7 +1040,7 @@ void FileView::renameItem(const QUrl &url)
     if (!index.isValid())
         return;
 
-    m_renaming = true;
+    m_renameState = FileView::RenameState::LOCKED;
     QAbstractItemView *view = currentView();
     // Editing is off by default, so a stray double click cannot start a rename
     view->setEditTriggers(QAbstractItemView::AllEditTriggers);
@@ -1039,6 +1056,10 @@ bool FileView::selectUrl(const QUrl &url, bool startRename)
         return false;
 
     QAbstractItemView *view = currentView();
+    if (m_renameState != FileView::RenameState::NORMAL) {
+        Q_ASSERT((!startRename));
+        m_renameState = FileView::RenameState::NORMAL;
+    }
     view->setCurrentIndex(index);
     view->selectionModel()->select(index,
                                    QItemSelectionModel::ClearAndSelect
