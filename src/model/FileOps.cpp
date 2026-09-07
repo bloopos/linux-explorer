@@ -238,9 +238,10 @@ private:
     QWidget *m_window;
     QObject *m_context = nullptr;
     QUrl m_firstPath;
+    bool m_pathSet = false;
 
 public:
-    explicit RenameInstance(QWidget *window) : m_firstPath()
+    explicit RenameInstance(QWidget *window, const QUrl& fallbackPath) : m_firstPath(fallbackPath)
     {
         m_window = window;
     }
@@ -266,8 +267,10 @@ public:
         QObject::connect(job, &KIO::CopyJob::copyingDone, context(),
             [this](KIO::Job* finished, const QUrl&, const QUrl& newPath, const QDateTime &, bool, bool)
             {
-                if (finished->error() != KIO::ERR_USER_CANCELED && m_firstPath.isEmpty())
+                if (finished->error() != KIO::ERR_USER_CANCELED && (!m_pathSet)) {
                     m_firstPath = newPath;
+                    m_pathSet = true;
+                }
             });
 
         job->setUiDelegate(delegateFor(m_window));
@@ -278,18 +281,18 @@ public:
     }
 
     QUrl
-    firstPath(const QUrl& fallback)
+    firstPath() const
     {
-        return (m_firstPath.isEmpty()) ? fallback : m_firstPath;
+        return m_firstPath;
     }
 };
 
 // One at a time, since firing them together races several jobs at overlapping
 // target names and stacks their overwrite prompts on top of each other
-void renameChain(RenameInstance* instance, QList<QPair<QUrl, QString>> steps)
+bool renameChain(RenameInstance* instance, QList<QPair<QUrl, QString>> steps)
 {
     if (steps.isEmpty())
-        return;
+        return false;
 
     const QPair<QUrl, QString> step = steps.takeFirst();
     KIO::CopyJob *job = instance->startRename(step.first, step.second);
@@ -300,36 +303,44 @@ void renameChain(RenameInstance* instance, QList<QPair<QUrl, QString>> steps)
     auto context = instance->context();
 
     QObject::connect(job, &KJob::result, context,
-                     [steps, instance](KJob *finished) {
-                         if (finished->error() != KIO::ERR_USER_CANCELED)
-                             renameChain(instance, steps);
+                     [instance, steps](KJob *finished) {
+                        if (finished->error() != KIO::ERR_USER_CANCELED) {
+                            if (renameChain(instance, steps))
+                                return;
+                        }
+                        Q_EMIT GLOBAL_RENAME_CONTEXT.finishRename(instance->firstPath());
+                        delete instance;
                      });
 
-    // Ensures that all steps are executed.
-    job->exec();
+    return true;
 }
 } // namespace
 
-QUrl rename(const QUrl &url, const QString &newName, QWidget *window)
+bool rename(const QUrl &url, const QString &newName, QWidget *window)
 {
-    RenameInstance context(window);
-    auto job = context.startRename(url, newName);
-    // Prevent a data race.
-    if (job != nullptr)
-        job->exec();
-    return context.firstPath(url);
+    RenameInstance instance(window, url);
+    auto job = instance.startRename(url, newName);
+    if (job == nullptr)
+        return false;
+    QObject::connect(job, &KJob::result, instance.context(),
+                     [instance](KJob *finished) {
+                         Q_EMIT GLOBAL_RENAME_CONTEXT.finishRename(instance.firstPath());
+                    });
+    return true;
 }
 
-QUrl renameBatch(const QList<KFileItem> &items, const QString &baseName,
+bool renameBatch(const QList<KFileItem> &items, const QString &baseName,
                  QWidget *window)
 {
     Q_ASSERT((!items.isEmpty()));
 
     if (baseName.isEmpty())
-        return items.first().url();
+        return false;
+
+    QUrl firstUrl = items.first().url();
 
     if (items.size() == 1)
-        return rename(items.first().url(), baseName, window);
+        return rename(firstUrl, baseName, window);
 
     // The editor is prefilled with one file's real name, so an unchanged
     // commit still carries its extension and every file would end up with two
@@ -356,10 +367,13 @@ QUrl renameBatch(const QList<KFileItem> &items, const QString &baseName,
                                       .arg(suffix)});
     }
 
-    QUrl fallback = steps.first().first;
-    RenameInstance instance(window);
-    renameChain(&instance, steps);
-    return instance.firstPath(fallback);
+    auto instance = new RenameInstance(window, firstUrl);
+    if (renameChain(instance, steps))
+        return true;
+    else {
+        delete instance;
+        return false;
+    }
 }
 
 void extractArchive(const QUrl &archiveUrl, const QUrl &destination,

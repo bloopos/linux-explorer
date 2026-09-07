@@ -1721,6 +1721,9 @@ QWidget *MainWindow::buildBody()
         for (QAction *action : m_groupGroup->actions())
             action->setChecked(action->data().toInt() == column);
     });
+    connect(&FileOps::GLOBAL_RENAME_CONTEXT, &FileOps::GlobalRenameContext::finishRename, this, [this](const QUrl &newUrl) {
+        m_fileView->selectUrl(newUrl);
+    });
 
     m_computerView = new ComputerView(m_computerModel);
     connect(m_computerView, &ComputerView::urlActivated, this, &MainWindow::navigateTo);
@@ -2828,13 +2831,13 @@ void MainWindow::applyRename(const QUrl &url, const QString &newName)
                                        [&url](const KFileItem &item) {
         return item.url() == url;
     });
-    if (batch.size() > 1 && sameBatch) {
-        QUrl newUrl = FileOps::renameBatch(batch, newName, this);
-        m_fileView->selectUrl(newUrl);
-    } else {
-        QUrl newUrl = FileOps::rename(url, newName, this);
-        m_fileView->selectUrl(newUrl);
-    }
+
+    bool renamed = (batch.size() > 1 && sameBatch)
+    ? FileOps::renameBatch(batch, newName, this)
+    : FileOps::rename(url, newName, this);
+
+    if (!renamed)
+        m_fileView->selectUrl(url);
 }
 
 void MainWindow::createNewFolder()
